@@ -1,49 +1,37 @@
 import os
 from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes
-)
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import openai
 
-# Config (Railway will inject these)
+# Configure API keys
 openai.api_key = os.getenv("OPENAI_API_KEY")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-# Trading analysis function
 async def analyze_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_message = update.message.text
-    
-    # AI response (using GPT-4 for trading logic)
-    response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[
-            {"role": "system", "content": "You are a professional trading bot. Analyze support/resistance, RSI, and timeframes. Also mention upcoming USD news if relevant."},
-            {"role": "user", "content": user_message}
-        ]
-    )
-    
-    await update.message.reply_text(response.choices[0].message['content'])
+    try:
+        user_message = update.message.text
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You're a trading expert. Analyze RSI, support/resistance, and fundamentals."},
+                {"role": "user", "content": user_message}
+            ]
+        )
+        await update.message.reply_text(response.choices[0].message['content'])
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Error: {str(e)}")
 
-# Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 Trading Bot Active! Send a trading pair like 'BTC/USD 1h RSI'")
+    await update.message.reply_text("📈 Trading Bot Ready! Ask me about any asset.")
 
 def main():
-    # Get Telegram token from Railway env
-    TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    # Create Application
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    # Handlers
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_trade))
     
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_trade))
-    
-    # Run bot
-    application.run_polling()
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
