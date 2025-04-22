@@ -1,33 +1,49 @@
 import os
-import telegram
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes
+)
 import openai
 
 # Config (Railway will inject these)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-def analyze_trade(update, context):
+# Trading analysis function
+async def analyze_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
+    
+    # AI response (using GPT-4 for trading logic)
     response = openai.ChatCompletion.create(
         model="gpt-4",
         messages=[
-            {"role": "system", "content": "You are a trading bot. Analyze RSI, support/resistance, and timeframes. Include USD news if relevant."},
+            {"role": "system", "content": "You are a professional trading bot. Analyze support/resistance, RSI, and timeframes. Also mention upcoming USD news if relevant."},
             {"role": "user", "content": user_message}
         ]
     )
-    update.message.reply_text(response.choices[0].message['content'])
+    
+    await update.message.reply_text(response.choices[0].message['content'])
 
-def start(update, context):
-    update.message.reply_text("🚀 Trading Bot Active! Send a pair like 'BTC/USD 1h RSI'")
+# Start command
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🚀 Trading Bot Active! Send a trading pair like 'BTC/USD 1h RSI'")
 
 def main():
+    # Get Telegram token from Railway env
     TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-    updater = Updater(TELEGRAM_TOKEN, use_context=True)
-    dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(MessageHandler(Filters.text, analyze_trade))
-    updater.start_polling()
-    updater.idle()
+    
+    # Create Application
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    # Add handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_trade))
+    
+    # Run bot
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
