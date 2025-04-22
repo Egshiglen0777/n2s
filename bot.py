@@ -1,34 +1,53 @@
 import os
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from openai import OpenAI  # Updated import
+from openai import OpenAI
 
-# Configure API keys
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))  # New client initialization
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+
+# Enhanced system prompt with trading expertise
+TRADING_EXPERT_SYSTEM = """
+You are a professional trading bot specializing in technical and fundamental analysis. 
+When analyzing any asset (forex/crypto/stocks):
+
+1. Always include:
+   - Key support/resistance levels
+   - Trend analysis (HTF + current TF)
+   - Volume analysis (when available)
+   - RSI and MACD conditions
+   - Relevant news/events (NFP, FOMC, etc.)
+
+2. Structure responses clearly:
+   [TREND] Bullish/Bearish/Neutral
+   [KEY LEVELS] S1/S2/R1/R2
+   [INDICATORS] RSI: 54 (neutral), MACD: bullish crossover
+   [ACTION] Buy/Sell/Wait + logical TP/SL
+   [NEWS] Upcoming USD CPI data on Friday
+
+3. For crypto include:
+   - Liquidation levels
+   - BTC dominance impact
+   - Key on-chain metrics
+"""
 
 async def analyze_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_message = update.message.text
-        response = client.chat.completions.create(  # Updated API call
-            model="gpt-4",
+        
+        response = client.chat.completions.create(
+            model="gpt-4-turbo",
             messages=[
-                {"role": "system", "content": "You're a trading expert. Analyze RSI, support/resistance, and fundamentals. Include key levels and news when relevant."},
-                {"role": "user", "content": user_message}
-            ]
+                {"role": "system", "content": TRADING_EXPERT_SYSTEM},
+                {"role": "user", "content": f"Analyze this trading query: {user_message}"}
+            ],
+            temperature=0.3  # More deterministic outputs
         )
-        await update.message.reply_text(response.choices[0].message.content)  # Updated response access
+        
+        analysis = response.choices[0].message.content
+        await update.message.reply_text(f"📊 Analysis:\n\n{analysis}")
+        
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Error analyzing trade: {str(e)}")
+        await update.message.reply_text(f"⚠️ Error: {str(e)}")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📈 Trading Bot Ready! Ask me about any asset (e.g. 'GBPJPY 1H RSI')")
-
-def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_trade))
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+# ... (rest of the code remains same as previous version)
