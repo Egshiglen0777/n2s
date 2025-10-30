@@ -8,24 +8,108 @@ from PIL import Image
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from openai import OpenAI
-from pybit.unified_trading import HTTP
+
+# ===== API CONFIG ===== #
+BINANCE_BASE_URL = "https://api.binance.com"
+TWELVEDATA_BASE_URL = "https://api.twelvedata.com"
 
 # ===== INIT ===== #
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-bybit = HTTP(
-    api_key=os.getenv("BYBIT_API_KEY"),
-    api_secret=os.getenv("BYBIT_API_SECRET"),
-    testnet=False
-)
 
 # ===== CONFIGURATION ===== #
 PERSONALITY = """
 You're Tisxa - a professional trading assistant with:
 1. **Chart Analysis**: Identify trends, S/R, patterns
-2. **Market Data**: Real-time prices + news
+2. **Market Data**: Real-time crypto + forex
 3. **Economic Calendar**: Upcoming events
-4. **Casual Mode**: Trading humor when appropriate
+4. **Risk Warnings**: Always include risk disclaimers
+5. **Casual Mode**: Trading humor when appropriate
+
+Always provide clear, actionable insights with risk management notes.
 """
+
+# ===== BINANCE CRYPTO FUNCTIONS ===== #
+def get_binance_price(symbol: str) -> str:
+    """Fetch real-time crypto price from Binance"""
+    try:
+        binance_symbol = symbol.replace("/", "")
+        url = f"{BINANCE_BASE_URL}/api/v3/ticker/price?symbol={binance_symbol}"
+        
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        
+        if 'price' in data:
+            price = float(data['price'])
+            return f"${price:,.2f}" if price > 1 else f"${price:.6f}"
+        else:
+            return "Price unavailable"
+            
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+def get_binance_24h_stats(symbol: str) -> dict:
+    """Get 24h crypto price change statistics"""
+    try:
+        binance_symbol = symbol.replace("/", "")
+        url = f"{BINANCE_BASE_URL}/api/v3/ticker/24hr?symbol={binance_symbol}"
+        
+        response = requests.get(url, timeout=5)
+        return response.json()
+    except:
+        return {}
+
+# ===== TWELVEDATA FOREX FUNCTIONS ===== #
+def get_forex_price(forex_pair: str) -> str:
+    """Fetch real-time forex price from Twelve Data"""
+    try:
+        # Format: EUR/USD -> EUR/USD
+        api_key = os.getenv("TWELVEDATA_API_KEY")
+        url = f"{TWELVEDATA_BASE_URL}/price?symbol={forex_pair}&apikey={api_key}"
+        
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        
+        if data.get('status') == 'ok' and 'price' in data:
+            price = float(data['price'])
+            return f"${price:.4f}"
+        else:
+            return "Forex price unavailable"
+            
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+def get_forex_quote(forex_pair: str) -> dict:
+    """Get detailed forex quote"""
+    try:
+        api_key = os.getenv("TWELVEDATA_API_KEY")
+        url = f"{TWELVEDATA_BASE_URL}/quote?symbol={forex_pair}&apikey={api_key}"
+        
+        response = requests.get(url, timeout=5)
+        return response.json()
+    except:
+        return {}
+
+# ===== UNIVERSAL PRICE FETCHER ===== #
+def get_universal_price(symbol: str) -> tuple:
+    """Smart price fetcher - returns (price, asset_type, stats)"""
+    symbol_clean = symbol.upper().replace("/", "")
+    
+    # Check if it's forex (major pairs)
+    forex_pairs = ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD']
+    
+    if symbol_clean in forex_pairs:
+        price = get_forex_price(symbol)
+        stats = get_forex_quote(symbol)
+        return price, "forex", stats
+    
+    # Check if it's crypto (ends with USDT or major pairs)
+    elif symbol_clean.endswith('USDT') or symbol_clean in ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']:
+        price = get_binance_price(symbol)
+        stats = get_binance_24h_stats(symbol)
+        return price, "crypto", stats
+    
+    else:
+        return "Asset not supported", "unknown", {}
 
 # ===== IMPROVED IMAGE HANDLING ===== #
 async def process_image(photo_file):
@@ -33,11 +117,9 @@ async def process_image(photo_file):
     img_data = io.BytesIO(await photo_file.download_as_bytearray())
     img = Image.open(img_data)
     
-    # Convert to RGB if needed
     if img.mode != 'RGB':
         img = img.convert('RGB')
     
-    # Resize if too large
     if img.size[0] > 2000 or img.size[1] > 2000:
         img = img.resize((1600, 900))
     
@@ -45,7 +127,7 @@ async def process_image(photo_file):
     img.save(buffered, format="JPEG", quality=90)
     return base64.b64encode(buffered.getvalue()).decode()
 
-# ===== FIXED CHART ANALYSIS ===== #
+# ===== CHART ANALYSIS ===== #
 async def analyze_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         photo_file = await update.message.photo[-1].get_file()
@@ -56,12 +138,12 @@ async def analyze_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             messages=[
                 {
                     "role": "system",
-                    "content": "Analyze trading charts. Focus on: trends, S/R levels, patterns."
+                    "content": "Analyze trading charts. Focus on: trends, support/resistance levels, chart patterns. Provide actionable insights with risk management notes."
                 },
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": "Analyze this chart:"},
+                        {"type": "text", "text": "Analyze this trading chart:"},
                         {
                             "type": "image_url",
                             "image_url": {
@@ -75,14 +157,14 @@ async def analyze_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         analysis = response.choices[0].message.content
-        await update.message.reply_text(f"📊 Chart Analysis\n\n{analysis}")
+        await update.message.reply_text(f"📊 Chart Analysis\n\n{analysis}\n\n⚠️ Not financial advice")
         
     except Exception as e:
         await update.message.reply_text(
             "⚠️ Please send:\n"
-            "1. Clear price chart only\n"
-            "2. No indicators/overlays\n"
-            "3. 4H/Daily timeframe preferred\n"
+            "• Clear price chart only\n"
+            "• No indicators/overlays\n"
+            "• 4H/Daily timeframe preferred\n"
             f"Error: {str(e)[:200]}"
         )
 
@@ -93,47 +175,97 @@ async def analyze_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asset = extract_asset(user_msg)
         
         if asset:
-            is_crypto = 'USDT' in asset
-            symbol = asset.replace("/", "")
+            price, asset_type, stats = get_universal_price(asset)
             
-            try:
-                price = get_crypto_price(symbol) if is_crypto else get_forex_price(symbol)
-                response = client.chat.completions.create(
-                    model="gpt-4-turbo",
-                    messages=[
-                        {"role": "system", "content": PERSONALITY},
-                        {"role": "user", "content": f"Analyze {asset} at {price}. Include key levels and news."}
-                    ]
-                )
-                await update.message.reply_text(f"📈 {asset} @ {price}\n\n{response.choices[0].message.content}")
-            except Exception as e:
-                await update.message.reply_text(f"🔴 Data error: {str(e)}\nTry crypto pairs like BTC/USDT")
+            # Build analysis prompt based on asset type
+            if asset_type == "crypto" and stats:
+                change = float(stats.get('priceChangePercent', 0))
+                volume = float(stats.get('volume', 0))
+                prompt = f"Analyze {asset} at {price}. 24h change: {change:+.2f}%. Volume: ${volume:,.0f}. Provide key levels and short-term outlook with risk management."
+                
+            elif asset_type == "forex" and stats:
+                change = float(stats.get('percent_change', 0))
+                prompt = f"Analyze {asset} at {price}. Daily change: {change:+.2f}%. Provide key levels and short-term outlook with risk management."
+                
+            else:
+                prompt = f"Analyze {asset} at {price}. Provide key levels and short-term outlook with risk management."
+            
+            response = client.chat.completions.create(
+                model="gpt-4-turbo",
+                messages=[
+                    {"role": "system", "content": PERSONALITY},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            # Format response
+            analysis = response.choices[0].message.content
+            
+            if asset_type == "crypto" and stats:
+                change = float(stats.get('priceChangePercent', 0))
+                volume = float(stats.get('volume', 0))
+                reply_text = f"💰 {asset} @ {price}\n24h: {change:+.2f}% | Vol: ${volume:,.0f}\n\n{analysis}\n\n⚠️ Not financial advice"
+            elif asset_type == "forex" and stats:
+                change = float(stats.get('percent_change', 0))
+                reply_text = f"💱 {asset} @ {price}\nChange: {change:+.2f}%\n\n{analysis}\n\n⚠️ Not financial advice"
+            else:
+                reply_text = f"📈 {asset} @ {price}\n\n{analysis}\n\n⚠️ Not financial advice"
+                
+            await update.message.reply_text(reply_text)
         else:
             await handle_general_query(update, user_msg)
             
     except Exception as e:
-        await update.message.reply_text(f"💥 Oops: {str(e)}")
+        await update.message.reply_text(f"💥 Market data error: {str(e)}")
 
 # ===== ECONOMIC CALENDAR ===== #
 async def get_economic_news():
     """Fetch upcoming economic events"""
     try:
-        url = f"https://api.twelvedata.com/economic_calendar?apikey={os.getenv('TWELVEDATA_API_KEY')}"
-        events = requests.get(url).json().get("data", [])
-        return "\n".join(
+        api_key = os.getenv("TWELVEDATA_API_KEY")
+        url = f"{TWELVEDATA_BASE_URL}/economic_calendar?apikey={api_key}"
+        response = requests.get(url, timeout=5)
+        events = response.json().get("data", [])
+        
+        today_events = [
             f"• {e['event']} ({e['country']}) @ {e['time']}" 
             for e in events[:5]  # Show next 5 events
-        )
+        ]
+        return "\n".join(today_events) if today_events else "No major events today"
     except:
-        return "⚠️ News data unavailable"
+        return "⚠️ Economic calendar unavailable"
 
 # ===== GENERAL QUERIES ===== #
 async def handle_general_query(update: Update, query: str):
-    if "news" in query.lower() or "economic" in query.lower():
+    query_lower = query.lower()
+    
+    if "news" in query_lower or "economic" in query_lower or "calendar" in query_lower:
         news = await get_economic_news()
-        await update.message.reply_text(f"📅 Upcoming Events:\n\n{news}")
-    elif "real time" in query.lower():
-        await update.message.reply_text("🔄 I track real-time prices via:\n• Bybit (crypto)\n• TwelveData (forex)")
+        await update.message.reply_text(f"📅 Economic Calendar:\n\n{news}")
+    
+    elif "real time" in query_lower or "data" in query_lower:
+        await update.message.reply_text(
+            "🔄 Real-time Data Sources:\n"
+            "• Crypto: Binance (100+ pairs)\n"
+            "• Forex: Twelve Data (Major pairs)\n"
+            "• Analysis: GPT-4 + Chart reading\n\n"
+            "Try: 'Analyze BTC/USDT' or 'Analyze EUR/USD'"
+        )
+    
+    elif "support" in query_lower or "pairs" in query_lower:
+        await update.message.reply_text(
+            "💎 Supported Markets:\n\n"
+            "CRYPTO (Binance):\n"
+            "• BTC/USDT, ETH/USDT, BNB/USDT\n"
+            "• ADA/USDT, DOT/USDT, LINK/USDT\n"
+            "• 100+ Binance pairs\n\n"
+            "FOREX (Twelve Data):\n"
+            "• EUR/USD, GBP/USD, USD/JPY\n"
+            "• USD/CHF, AUD/USD, USD/CAD\n"
+            "• NZD/USD\n\n"
+            "Just send: 'Analyze [PAIR]'"
+        )
+    
     else:
         response = client.chat.completions.create(
             model="gpt-4-turbo",
@@ -148,29 +280,52 @@ async def handle_general_query(update: Update, query: str):
 # ===== HELPER FUNCTIONS ===== #
 def extract_asset(text: str) -> str:
     text = text.upper().strip()
-    if match := re.search(r'([A-Z]{3,6})[/-]?([A-Z]{3,6})', text):
+    if match := re.search(r'([A-Z]{2,6})[/-]?([A-Z]{2,6})', text):
         base, quote = match.groups()
-        return f"{base}/{quote or 'USDT'}"
+        return f"{base}/{quote}"
     return None
 
 # ===== BOT SETUP ===== #
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = """
-💎 Tisxa Trading Bot 💎
+💎 TISXA TRADING BOT 💎
 
-Commands:
-• Send chart screenshots
-• "Analyze GBP/JPY"
-• "News tomorrow?"
-• "Real-time data?"
+*Real-time Crypto + Forex Analysis*
+
+📊 **Chart Analysis**: Send screenshot
+💰 **Crypto Prices**: 'Analyze BTC/USDT'
+💱 **Forex Prices**: 'Analyze EUR/USD'  
+📅 **Economic News**: 'News today?'
+🔄 **Data Sources**: 'Real-time data?'
+
+*Supported Markets:*
+• Crypto: 100+ Binance pairs
+• Forex: Major pairs (EUR/USD, etc.)
+
+⚠️ *Not financial advice - Always do your own research*
 """
     await update.message.reply_text(help_text)
 
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle errors gracefully"""
+    print(f"Error: {context.error}")
+    try:
+        await update.message.reply_text("⚠️ Bot error. Please try again or check /start")
+    except:
+        pass
+
 def main():
     app = Application.builder().token(os.getenv("TELEGRAM_TOKEN")).build()
+    
+    # Add handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.PHOTO, analyze_chart))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_market))
+    
+    # Error handler
+    app.add_error_handler(error_handler)
+    
+    print("🚀 Tisxa Trading Bot is starting...")
     app.run_polling()
 
 if __name__ == "__main__":
