@@ -36,7 +36,7 @@ You're Loria - a street-smart trading assistant with that real talk vibe. You so
 **Always remember:** You're helping people make money, so be hype but responsible.
 """
 
-# ===== BINANCE CRYPTO FUNCTIONS ===== #
+# ===== FIXED BINANCE CRYPTO FUNCTIONS ===== #
 def get_binance_price(symbol: str) -> str:
     """Fetch real-time crypto price from Binance"""
     try:
@@ -49,11 +49,13 @@ def get_binance_price(symbol: str) -> str:
         if 'price' in data:
             price = float(data['price'])
             return f"${price:,.2f}" if price > 1 else f"${price:.6f}"
+        elif 'msg' in data:
+            return f"Binance error: {data['msg']}"
         else:
             return "Price unavailable"
             
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Binance API error: {str(e)}"
 
 def get_binance_24h_stats(symbol: str) -> dict:
     """Get 24h crypto price change statistics"""
@@ -62,48 +64,69 @@ def get_binance_24h_stats(symbol: str) -> dict:
         url = f"{BINANCE_BASE_URL}/api/v3/ticker/24hr?symbol={binance_symbol}"
         
         response = requests.get(url, timeout=5)
-        return response.json()
+        data = response.json()
+        
+        if 'lastPrice' in data:
+            return data
+        else:
+            return {"priceChangePercent": "0", "volume": "0"}
     except:
-        return {}
+        return {"priceChangePercent": "0", "volume": "0"}
 
-# ===== TWELVEDATA FOREX FUNCTIONS ===== #
+# ===== FIXED TWELVEDATA FOREX FUNCTIONS ===== #
 def get_forex_price(forex_pair: str) -> str:
     """Fetch real-time forex price from Twelve Data"""
     try:
-        # Format: EUR/USD -> EUR/USD
+        # Format: GBP/JPY -> GBP/JPY
         api_key = os.getenv("TWELVEDATA_API_KEY")
-        url = f"{TWELVEDATA_BASE_URL}/price?symbol={forex_pair}&apikey={api_key}"
+        if not api_key:
+            return "TwelveData API key missing"
+            
+        # Remove slash for API call
+        symbol_clean = forex_pair.replace("/", "")
+        url = f"{TWELVEDATA_BASE_URL}/price?symbol={symbol_clean}&apikey={api_key}"
         
         response = requests.get(url, timeout=5)
         data = response.json()
         
         if data.get('status') == 'ok' and 'price' in data:
             price = float(data['price'])
-            return f"${price:.4f}"
+            return f"${price:.4f}" if price > 1 else f"${price:.6f}"
+        elif 'message' in data:
+            return f"TwelveData: {data['message']}"
         else:
             return "Forex price unavailable"
             
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"TwelveData error: {str(e)}"
 
 def get_forex_quote(forex_pair: str) -> dict:
     """Get detailed forex quote"""
     try:
         api_key = os.getenv("TWELVEDATA_API_KEY")
-        url = f"{TWELVEDATA_BASE_URL}/quote?symbol={forex_pair}&apikey={api_key}"
+        if not api_key:
+            return {"percent_change": "0"}
+            
+        symbol_clean = forex_pair.replace("/", "")
+        url = f"{TWELVEDATA_BASE_URL}/quote?symbol={symbol_clean}&apikey={api_key}"
         
         response = requests.get(url, timeout=5)
-        return response.json()
+        data = response.json()
+        
+        if data.get('status') == 'ok':
+            return data
+        else:
+            return {"percent_change": "0"}
     except:
-        return {}
+        return {"percent_change": "0"}
 
-# ===== UNIVERSAL PRICE FETCHER ===== #
+# ===== DEBUG UNIVERSAL PRICE FETCHER ===== #
 def get_universal_price(symbol: str) -> tuple:
     """Smart price fetcher - returns (price, asset_type, stats)"""
     symbol_clean = symbol.upper().replace("/", "")
     
     # Check if it's forex (major pairs)
-    forex_pairs = ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD', 'GBPJPY', 'EURJPY']
+    forex_pairs = ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD', 'GBPJPY', 'EURJPY', 'EURGBP']
     
     if symbol_clean in forex_pairs:
         price = get_forex_price(symbol)
@@ -111,7 +134,7 @@ def get_universal_price(symbol: str) -> tuple:
         return price, "forex", stats
     
     # Check if it's crypto (ends with USDT or major pairs)
-    elif symbol_clean.endswith('USDT') or symbol_clean in ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'ADAUSDT']:
+    elif symbol_clean.endswith('USDT') or symbol_clean in ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'ADAUSDT', 'XRPUSDT']:
         price = get_binance_price(symbol)
         stats = get_binance_24h_stats(symbol)
         return price, "crypto", stats
@@ -255,6 +278,24 @@ async def analyze_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Error: {str(e)[:200]}"
         )
 
+# ===== DEBUG COMMAND ===== #
+async def debug_apis(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Test all APIs to see what's working"""
+    test_pairs = [
+        ("BTC/USDT", "crypto"),
+        ("ETH/USDT", "crypto"), 
+        ("EUR/USD", "forex"),
+        ("GBP/JPY", "forex")
+    ]
+    
+    results = []
+    for pair, expected_type in test_pairs:
+        price, asset_type, stats = get_universal_price(pair)
+        results.append(f"{pair}: {price} ({asset_type})")
+    
+    debug_msg = "🔧 Loria's API Debug Results:\n" + "\n".join(results)
+    await update.message.reply_text(debug_msg)
+
 # ===== ENHANCED MARKET ANALYSIS ===== #
 async def analyze_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -269,21 +310,25 @@ async def analyze_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if asset:
             price, asset_type, stats = get_universal_price(asset)
             
-            if "Asset not supported" in price:
+            if "Asset not supported" in price or "error" in price.lower() or "unavailable" in price.lower():
                 await update.message.reply_text(
-                    f"🔄 Ayy bro, Loria couldn't find data for *{asset}*\n\n"
+                    f"🔄 Ayy bro, Loria couldn't get data for *{asset}*\n\n"
                     "**Try these lit pairs:**\n"
                     "• Forex: EUR/USD, GBP/JPY, USD/CAD\n"
                     "• Crypto: BTC/USDT, ETH/USDT, SOL/USDT\n\n"
-                    "Just hit me with 'analyze [pair]'! 💰"
+                    "Or type /debug to check API status"
                 )
                 return
             
             # Build hype analysis prompt
             if asset_type == "crypto" and stats:
                 change = float(stats.get('priceChangePercent', 0))
-                volume = float(stats.get('volume', 0))
-                prompt = f"Ayy bro, analyze {asset} at {price}. 24h change: {change:+.2f}%. Volume: ${volume:,.0f}. Give me that real talk analysis with key levels and short-term vibe. Keep it street but smart."
+                volume = stats.get('volume', '0')
+                if volume != '0':
+                    volume_formatted = f"${float(volume):,.0f}"
+                else:
+                    volume_formatted = "N/A"
+                prompt = f"Ayy bro, analyze {asset} at {price}. 24h change: {change:+.2f}%. Volume: {volume_formatted}. Give me that real talk analysis with key levels and short-term vibe. Keep it street but smart."
                 
             elif asset_type == "forex" and stats:
                 change = float(stats.get('percent_change', 0))
@@ -306,8 +351,12 @@ async def analyze_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if asset_type == "crypto" and stats:
                 change = float(stats.get('priceChangePercent', 0))
-                volume = float(stats.get('volume', 0))
-                reply_text = f"💰 *{asset}* @ {price}\n24h: {change:+.2f}% | Vol: ${volume:,.0f}\n\n{analysis}\n\n⚠️ Not financial advice - always do your own research homie"
+                volume = stats.get('volume', '0')
+                if volume != '0':
+                    volume_formatted = f"${float(volume):,.0f}"
+                else:
+                    volume_formatted = "N/A"
+                reply_text = f"💰 *{asset}* @ {price}\n24h: {change:+.2f}% | Vol: {volume_formatted}\n\n{analysis}\n\n⚠️ Not financial advice - always do your own research homie"
             elif asset_type == "forex" and stats:
                 change = float(stats.get('percent_change', 0))
                 reply_text = f"💱 *{asset}* @ {price}\nChange: {change:+.2f}%\n\n{analysis}\n\n⚠️ Stay safe out there bro - manage your risk"
@@ -393,6 +442,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💰 *Crypto*: "analyze btc/usdt" or "btc analysis"
 💱 *Forex*: "analyze gbp/jpy" or "eurusd price"
 📅 *News*: "what's the news?" or "economic calendar"
+🔧 *Debug*: "/debug" to check API status
 
 *Quick Examples:*
 • "yo analyze btc/usdt"
@@ -422,6 +472,7 @@ def main():
     
     # Add handlers
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("debug", debug_apis))
     app.add_handler(MessageHandler(filters.PHOTO, analyze_chart))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_market))
     
