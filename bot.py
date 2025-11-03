@@ -81,13 +81,12 @@ async def chat_with_openai(user_text):
                 {"role": "system", "content": PERSONALITY},
                 {"role": "user", "content": user_text}
             ],
-            max_completion_tokens=400  # ✅ updated
-            # temperature not supported on this model
+            max_completion_tokens=400  # ✅ updated token limit
+            # temperature removed because gpt-5 default only
         )
         return res.choices[0].message.content
     except Exception as e:
         return f"⚠️ Алдаа: {e}"
-
 
 # ===== TELEGRAM HANDLERS ===== #
 async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -112,7 +111,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • BTC/USDT шинжилгээ хий
 • EUR/USD ханш хэд байна?
 • MACD гэж юу вэ?
-• Хэрхэн өөрийн хөрөнгийг өсгөх вэ?
+• Хэрхэн хөрөнгөө өсгөх вэ?
 
 Юу мэдмээр байна? Надтай ярь даа!
 """
