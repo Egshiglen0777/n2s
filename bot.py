@@ -1,11 +1,7 @@
 import os
 import re
-import io
-import base64
 import requests
 import logging
-from datetime import datetime
-from PIL import Image
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from openai import OpenAI
@@ -14,36 +10,33 @@ from openai import OpenAI
 logging.basicConfig(level=logging.INFO)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# ===== LORIA PERSONALITY ===== #
 PERSONALITY = """
-You're Loria - a street-smart trading assistant with that real talk vibe. You sound like a savvy trader from the hood who knows markets inside out.
+You're N2S — the smart trading assistant. You're like that helpful homie who knows AI, crypto, forex, stocks, life advice, and tech. You talk like a real person: chill, confident, and knows your stuff — nothing formal or robotic.
 
-**Your Style:**
-- Talk like you're chatting with a homie, not a corporate robot
-- Use slang: "bro", "dawg", "fire", "lit", "Ayy", "sheesh" 
-- Keep it real but professional when needed
-- Drop knowledge with confidence
-- Always include risk warnings but keep it casual
+• Use casual language: yo, bro, fam, bet, sheesh
+• Smart but not a nerd
+• Always give real value, not hype
+• Break down ideas clearly and fast
+• Add helpful warnings like “not financial advice, fam” casually
+• Let users ask anything: charts, life advice, coding, AI, etc.
+• End messages with a question or call to action when helpful
 
-**When analyzing:**
-- "Ayy bro, looking at GBP/JPY..."
-- "Sheesh! This chart is fire right now..."
-- "Real talk: this setup looks dangerous..."
-- "💰 This trade could print if..."
+You speak like ChatGPT but more friendly and modern. You don't pretend to be human — you just act human-friendly.
 
-**Always remember:** You're helping people make money, so be hype but responsible.
+DON'T: 
+- Use emojis in every message
+- Go full gangster slang
+- Make fake claims (like guaranteed profits)
 """
 
 # ===== FAST PRICE FUNCTIONS ===== #
 def get_crypto_price(symbol: str) -> tuple:
-    """Fetch real-time crypto price from CoinGecko"""
     try:
         coin_mapping = {
             "BTC/USDT": "bitcoin", "ETH/USDT": "ethereum", "BNB/USDT": "binancecoin",
             "SOL/USDT": "solana", "ADA/USDT": "cardano", "XRP/USDT": "ripple",
             "DOT/USDT": "polkadot", "LINK/USDT": "chainlink", "DOGE/USDT": "dogecoin"
         }
-        
         coin_id = coin_mapping.get(symbol)
         if not coin_id:
             return "Crypto not supported", 0
@@ -61,7 +54,6 @@ def get_crypto_price(symbol: str) -> tuple:
         return "API error", 0
 
 def get_forex_price(forex_pair: str) -> tuple:
-    """Mock forex prices - fast and reliable"""
     mock_prices = {
         "EUR/USD": ("$1.0856", 0.15), "GBP/JPY": ("$187.23", -0.32),
         "GBP/USD": ("$1.2678", 0.22), "USD/JPY": ("$149.56", 0.08), 
@@ -70,134 +62,63 @@ def get_forex_price(forex_pair: str) -> tuple:
     }
     return mock_prices.get(forex_pair, ("Forex price unavailable", 0))
 
-def get_universal_price(symbol: str) -> tuple:
-    """Smart price fetcher"""
-    forex_pairs = ['EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'NZD/USD', 'GBP/JPY', 'EUR/JPY', 'EUR/GBP']
-    
-    if symbol in forex_pairs:
-        price, change = get_forex_price(symbol)
-        return price, "forex", {"percent_change": change}
-    else:
-        price, change = get_crypto_price(symbol)
-        return price, "crypto", {"priceChangePercent": change}
-
-# ===== FAST ASSET DETECTION ===== #
 def extract_asset(text: str) -> str:
     text = text.upper().strip()
-    
-    casual_words = ['HI', 'HELLO', 'HEY', 'SUP', 'YO', 'BRO', 'DAWG', 'WASSUP', 'HOW ARE YOU']
-    if any(word in text for word in casual_words):
-        return None
-    
-    # Forex pairs
-    forex_match = re.search(r'\b([A-Z]{3})/([A-Z]{3})\b', text)
-    if forex_match:
-        return f"{forex_match.group(1)}/{forex_match.group(2)}"
-    
-    # Crypto pairs
-    crypto_match = re.search(r'\b([A-Z]{2,6})/USDT\b', text)
-    if crypto_match:
-        return f"{crypto_match.group(1)}/USDT"
-    
-    common_crypto = {'BTC': 'BTC/USDT', 'ETH': 'ETH/USDT', 'SOL': 'SOL/USDT', 'ADA': 'ADA/USDT'}
-    for crypto, pair in common_crypto.items():
-        if crypto in text and any(x in text for x in ['ANALYZE', 'PRICE', 'CHART']):
-            return pair
-    
+    if re.search(r'\b([A-Z]{3})/([A-Z]{3})\b', text):
+        return re.search(r'\b([A-Z]{3})/([A-Z]{3})\b', text).group()
+    if re.search(r'\b([A-Z]{2,6})/USDT\b', text):
+        return re.search(r'\b([A-Z]{2,6})/USDT\b', text).group()
     return None
 
-# ===== FAST HANDLERS ===== #
-async def handle_casual_convo(update: Update, query: str):
-    query_lower = query.lower()
-    
-    if any(word in query_lower for word in ['hi', 'hello', 'hey', 'sup', 'yo']):
-        responses = [
-            "Ayyy! Loria in the house! What's good bro? 💰",
-            "Yo dawg! Loria holding it down! 🚀",
-            "Sheeeesh! What's cooking, homie? 🔥"
-        ]
-        import random
-        await update.message.reply_text(random.choice(responses))
-        return True
-    return False
-
-async def analyze_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ===== CHAT HELPER ===== #
+async def chat_with_openai(user_text):
     try:
-        user_msg = update.message.text
-        
-        # Send immediate response
-        await update.message.reply_text("⚡ Loria's on it...")
-        
-        if await handle_casual_convo(update, user_msg):
-            return
-            
-        asset = extract_asset(user_msg)
-        
-        if asset:
-            price, asset_type, stats = get_universal_price(asset)
-            
-            if "unavailable" in price or "error" in price:
-                await update.message.reply_text(f"🔄 Ayy bro, no data for *{asset}*. Try: BTC/USDT, ETH/USDT, EUR/USD, GBP/JPY")
-                return
-            
-            # FAST GPT-3.5 Analysis
-            prompt = f"Ayy bro, analyze {asset} at {price}. Give me key levels and short-term vibe. Keep it street but smart."
-            
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",  # 🚀 FAST!
-                messages=[
-                    {"role": "system", "content": PERSONALITY},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.8,
-                max_tokens=400  # 🚀 SHORT & FAST!
-            )
-            
-            analysis = response.choices[0].message.content
-            
-            if asset_type == "crypto":
-                change = stats.get('priceChangePercent', 0)
-                reply_text = f"💰 *{asset}* @ {price}\n24h: {change:+.2f}%\n\n{analysis}\n\n⚠️ Not financial advice"
-            else:
-                change = stats.get('percent_change', 0)
-                reply_text = f"💱 *{asset}* @ {price}\nChange: {change:+.2f}%\n\n{analysis}\n\n⚠️ Stay safe bro"
-                
-            await update.message.reply_text(reply_text)
-        else:
-            await update.message.reply_text("Ayy homie! Try: 'analyze BTC/USDT' or 'analyze EUR/USD'")
-            
+        response = client.chat.completions.create(
+            model="gpt-5",  # ⭐ switch to gpt-4o-mini if needed
+            messages=[
+                {"role": "system", "content": PERSONALITY},
+                {"role": "user", "content": user_text}
+            ],
+            temperature=0.8,
+            max_tokens=400
+        )
+        return response.choices[0].message.content
     except Exception as e:
-        await update.message.reply_text(f"💥 Quick error: {str(e)[:50]}")
+        return f"Yo fam, quick error: {e}"
+
+async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_msg = update.message.text
+    
+    if asset := extract_asset(user_msg):
+        await update.message.reply_text("Hold up, checking prices...")
+        price, change = get_crypto_price(asset) if "USDT" in asset else get_forex_price(asset)
+        reply = f"{asset} is currently at {price} ({change:+.2f}%). Wanna break down the chart or strategy?"
+        await update.message.reply_text(reply)
+    else:
+        reply = await chat_with_openai(user_msg)
+        await update.message.reply_text(reply)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = """
-💎 *LORIA TRADING BOT* 💎  
-*Inspired by real love* 💖
+    welcome = """
+Yo, welcome to N2S — your AI homie for crypto, forex, stocks, tech, life talk, all that.
 
-*Ayy homie! Ready to make some moves?* 🤝
+Examples:
+• analyze BTC/USDT
+• what's EUR/USD doing
+• how do I start swing trading?
+• explain CEX vs DEX
 
-💰 *Crypto*: "analyze btc/usdt"  
-💱 *Forex*: "analyze eur/usd"  
-📊 *Charts*: Send screenshot
-
-*Examples:*
-• "yo analyze btc/usdt"
-• "what's gbp/jpy looking like?"
-• "eth analysis"
-
-⚠️ *Not financial advice - your homie with charts*
+Say anything — I got you.
 """
-    await update.message.reply_text(help_text)
+    await update.message.reply_text(welcome)
 
 def main():
     token = os.getenv("TELEGRAM_TOKEN")
     app = Application.builder().token(token).build()
-    
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_market))
-    
-    print("🚀 LORIA FAST EDITION - READY!")
-    app.run_polling(drop_pending_updates=True)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze))
+    print("🚀 N2S Bot ready.")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
