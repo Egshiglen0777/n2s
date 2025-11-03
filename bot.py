@@ -10,26 +10,27 @@ from openai import OpenAI
 logging.basicConfig(level=logging.INFO)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# ===== PERSONALITY ===== #
 PERSONALITY = """
-You're N2S — the smart trading assistant. You're like that helpful homie who knows AI, crypto, forex, stocks, life advice, and tech. You talk like a real person: chill, confident, and knows your stuff — nothing formal or robotic.
+Та N2S — ухаалаг арилжааны туслах. Хэрэглэгчидтэй Монгол хэлээр
+найрсаг, энгийн, ойлгомжтой байдлаар харилцана.
 
-• Use casual language: yo, bro, fam, bet, sheesh
-• Smart but not a nerd
-• Always give real value, not hype
-• Break down ideas clearly and fast
-• Add helpful warnings like “not financial advice, fam” casually
-• Let users ask anything: charts, life advice, coding, AI, etc.
-• End messages with a question or call to action when helpful
+⚡️ Хэн бэ:
+- Крипто, форекс, хувьцаа, AI, амьдралын зөвлөгөө гээд бүгдэд нь тусалдаг.
+- Чатбот биш, жинхэнэ найз шиг тайлбарладаг.
+- Хэрэглэгч юу асууж байгааг ойлгож, богино бөгөөд утгатай хариулдаг.
 
-You speak like ChatGPT but more friendly and modern. You don't pretend to be human — you just act human-friendly.
+🎯 Хэллэгийн хэв маяг:
+- Найрсаг, энгийн, жаахан хошигнолтой
+- Илүү сэтгэлтэй, эелдэг, туршлагатай мэт
+- Заримдаа "найз аа", "ах аа", "хөө" гэж дуудах үед тохируулж хэрэглэ
 
-DON'T: 
-- Use emojis in every message
-- Go full gangster slang
-- Make fake claims (like guaranteed profits)
+⚠️ Жич:
+- Санхүүгийн зөвлөгөө өгөхгүй, зөвхөн мэдээлэл өгдөг гэдгийг сануул.
+- Хэрэглэгчээс асуулт авах, ярилцлага үргэлжлүүлэх байдлаар бич.
 """
 
-# ===== FAST PRICE FUNCTIONS ===== #
+# ===== PRICE FETCHING ===== #
 def get_crypto_price(symbol: str) -> tuple:
     try:
         coin_mapping = {
@@ -39,7 +40,7 @@ def get_crypto_price(symbol: str) -> tuple:
         }
         coin_id = coin_mapping.get(symbol)
         if not coin_id:
-            return "Crypto not supported", 0
+            return "Хэмжигдэхгүй байна", 0
             
         url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd&include_24hr_change=true"
         response = requests.get(url, timeout=10)
@@ -49,9 +50,9 @@ def get_crypto_price(symbol: str) -> tuple:
             price = data[coin_id]['usd']
             change = data[coin_id].get('usd_24h_change', 0)
             return f"${price:,.2f}", change
-        return "Price unavailable", 0
+        return "Үнэ олдсонгүй", 0
     except:
-        return "API error", 0
+        return "API алдаа", 0
 
 def get_forex_price(forex_pair: str) -> tuple:
     mock_prices = {
@@ -60,21 +61,21 @@ def get_forex_price(forex_pair: str) -> tuple:
         "USD/CAD": ("$1.3567", -0.11), "AUD/USD": ("$0.6578", 0.05),
         "EUR/JPY": ("$161.34", 0.12), "EUR/GBP": ("£0.8567", -0.07)
     }
-    return mock_prices.get(forex_pair, ("Forex price unavailable", 0))
+    return mock_prices.get(forex_pair, ("Үнийн мэдээлэл алга", 0))
 
 def extract_asset(text: str) -> str:
     text = text.upper().strip()
-    if re.search(r'\b([A-Z]{3})/([A-Z]{3})\b', text):
-        return re.search(r'\b([A-Z]{3})/([A-Z]{3})\b', text).group()
-    if re.search(r'\b([A-Z]{2,6})/USDT\b', text):
-        return re.search(r'\b([A-Z]{2,6})/USDT\b', text).group()
+    forex = re.search(r'\b([A-Z]{3})/([A-Z]{3})\b', text)
+    if forex: return forex.group()
+    crypto = re.search(r'\b([A-Z]{2,6})/USDT\b', text)
+    if crypto: return crypto.group()
     return None
 
-# ===== CHAT HELPER ===== #
+# ===== OPENAI CALLER ===== #
 async def chat_with_openai(user_text):
     try:
-        response = client.chat.completions.create(
-            model="gpt-5",  # ⭐ switch to gpt-4o-mini if needed
+        res = client.chat.completions.create(
+            model="gpt-5",
             messages=[
                 {"role": "system", "content": PERSONALITY},
                 {"role": "user", "content": user_text}
@@ -82,17 +83,18 @@ async def chat_with_openai(user_text):
             temperature=0.8,
             max_tokens=400
         )
-        return response.choices[0].message.content
+        return res.choices[0].message.content
     except Exception as e:
-        return f"Yo fam, quick error: {e}"
+        return f"Алдаа гарлаа: {e}"
 
+# ===== HANDLERS ===== #
 async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_msg = update.message.text
     
     if asset := extract_asset(user_msg):
-        await update.message.reply_text("Hold up, checking prices...")
+        await update.message.reply_text("Хэсэг хүлээгээрэй...")
         price, change = get_crypto_price(asset) if "USDT" in asset else get_forex_price(asset)
-        reply = f"{asset} is currently at {price} ({change:+.2f}%). Wanna break down the chart or strategy?"
+        reply = f"{asset} одоогоор {price} байна. 24 цагийн өөрчлөлт: {change:+.2f}%. Танд дүн шинжилгээ хийх үү?"
         await update.message.reply_text(reply)
     else:
         reply = await chat_with_openai(user_msg)
@@ -100,24 +102,26 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome = """
-Yo, welcome to N2S — your AI homie for crypto, forex, stocks, tech, life talk, all that.
+👋 Сайн байна уу! Би бол N2S — таны хиймэл оюунтай найз.
 
-Examples:
-• analyze BTC/USDT
-• what's EUR/USD doing
-• how do I start swing trading?
-• explain CEX vs DEX
+Та крипто, форекс, хувьцаа эсвэл амьдралын зөвлөгөө ч асууж болно.
 
-Say anything — I got you.
+Жишээ:
+• BTC/USDT шинжилгээ
+• EUR/USD ханш хэд байна?
+• Зөвхөн MACD гэж юу вэ?
+
+Юу асуух вэ, надтай ярьцгаая.
 """
     await update.message.reply_text(welcome)
 
+# ===== MAIN ===== #
 def main():
     token = os.getenv("TELEGRAM_TOKEN")
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze))
-    print("🚀 N2S Bot ready.")
+    print("🚀 N2S Bot амжилттай ачааллаа.")
     app.run_polling()
 
 if __name__ == "__main__":
