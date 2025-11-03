@@ -81,12 +81,13 @@ async def chat_with_openai(user_text):
                 {"role": "system", "content": PERSONALITY},
                 {"role": "user", "content": user_text}
             ],
-            temperature=0.8,
-            max_completion_tokens=400  # ✅ New parameter
+            max_completion_tokens=400  # ✅ updated
+            # temperature not supported on this model
         )
         return res.choices[0].message.content
     except Exception as e:
         return f"⚠️ Алдаа: {e}"
+
 
 # ===== TELEGRAM HANDLERS ===== #
 async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
